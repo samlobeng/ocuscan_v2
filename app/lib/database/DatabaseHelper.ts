@@ -84,10 +84,29 @@ export class DatabaseHelper {
 
       // Create tables
       await this.createTables();
+      console.log('Tables created successfully');
+      
+      // Run migrations
+      await this.runMigrations();
+      console.log('Migrations completed successfully');
+      
       console.log('Database initialization completed');
     } catch (error) {
       console.error('Error initializing database:', error);
-      throw error;
+      // Try to recover by reinitializing
+      try {
+        if (this.database) {
+          await this.database.closeAsync();
+          this.database = null;
+        }
+        this.database = SQLite.openDatabase(this.DB_NAME);
+        await this.createTables();
+        await this.runMigrations();
+        console.log('Database recovered successfully');
+      } catch (recoveryError) {
+        console.error('Error recovering database:', recoveryError);
+        throw recoveryError;
+      }
     }
   }
 
@@ -121,7 +140,8 @@ export class DatabaseHelper {
               full_name TEXT NOT NULL,
               notes TEXT,
               created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-              updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+              updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+              synced INTEGER DEFAULT 0
             );
           `);
 
@@ -134,6 +154,7 @@ export class DatabaseHelper {
               diagnosis TEXT,
               confidence_score REAL,
               created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+              synced INTEGER DEFAULT 0,
               FOREIGN KEY (patient_id) REFERENCES patients (id)
             );
           `);
@@ -144,6 +165,48 @@ export class DatabaseHelper {
         },
         () => {
           console.log('Tables created successfully');
+          resolve();
+        }
+      );
+    });
+  }
+
+  private async runMigrations() {
+    if (!this.database) throw new Error('Database not initialized');
+
+    return new Promise<void>((resolve, reject) => {
+      this.database!.transaction(
+        (tx) => {
+          // Check if synced column exists in patients table
+          tx.executeSql(
+            "PRAGMA table_info(patients)",
+            [],
+            (_, result) => {
+              const columns = [];
+              for (let i = 0; i < result.rows.length; i++) {
+                columns.push(result.rows.item(i).name);
+              }
+              
+              // Add synced column if it doesn't exist
+              if (!columns.includes('synced')) {
+                tx.executeSql(
+                  "ALTER TABLE patients ADD COLUMN synced INTEGER DEFAULT 0"
+                );
+              }
+            },
+            (_, error) => {
+              console.error('Error checking table schema:', error);
+              reject(error);
+              return false;
+            }
+          );
+        },
+        (error) => {
+          console.error('Error running migrations:', error);
+          reject(error);
+        },
+        () => {
+          console.log('Migrations completed successfully');
           resolve();
         }
       );
@@ -163,38 +226,41 @@ export class DatabaseHelper {
     let supabaseUser = null;
     if (isOnline) {
       try {
+        // Create user in Supabase auth
         const { data, error } = await supabase.auth.signUp({
           email: user.email,
           password: user.password,
         });
         if (error) throw error;
-        supabaseUser = data.user;
+        if (!data.user) throw new Error('Failed to create user in Supabase');
 
-        // Insert into profiles table
-        if (supabaseUser) {
-          try {
-            const { error: profileError } = await supabase
-              .from('profiles')
-              .insert([
-                {
-                  id: supabaseUser.id, // or 'user_id' depending on your schema
-                  email: user.email,
-                  full_name: user.fullName,
-                  hospital_name: user.hospitalName,
-                  role: user.role,
-                  created_at: new Date().toISOString(),
-                },
-              ]);
-            if (profileError) throw profileError;
-          } catch (error) {
-            console.error('Error inserting profile in Supabase:', error);
-          }
+        // Create profile in Supabase
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .insert([
+            {
+              id: data.user.id,
+              email: user.email,
+              full_name: user.fullName,
+              hospital_name: user.hospitalName,
+              role: user.role,
+              created_at: new Date().toISOString(),
+            },
+          ]);
+
+        if (profileError) {
+          console.error('Profile creation error:', profileError);
+          throw profileError;
         }
+
+        supabaseUser = data.user;
       } catch (error) {
         console.error('Error creating user in Supabase:', error);
+        isOnline = false;
       }
     }
 
+    // Save to local database
     return new Promise((resolve, reject) => {
       this.database!.transaction(
         (tx) => {
@@ -238,6 +304,9 @@ export class DatabaseHelper {
     if (!this.database) {
       await this.initDatabase();
     }
+
+    // Ensure tables are created
+    await this.createTables();
 
     return new Promise((resolve, reject) => {
       this.database!.transaction(
@@ -316,28 +385,57 @@ export class DatabaseHelper {
     } catch {}
 
     let supabaseId = null;
-    let userId = null;
     if (isOnline) {
       try {
-        const { data: { user } } = await supabase.auth.getUser();
-        userId = user?.id;
+        // Get current session
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        if (sessionError) throw sessionError;
+        if (!session) throw new Error('No active session');
+
+        console.log('Current session user ID:', session.user.id);
+
+        // Check if profile exists
+        const { data: profile, error: profileError } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', session.user.id)
+          .single();
+
+        console.log('Profile check result:', { profile, profileError });
+
+        if (profileError) {
+          console.error('Error checking profile:', profileError);
+          throw profileError;
+        }
+
+        if (!profile) {
+          throw new Error('Profile not found');
+        }
+
+        // Create patient in Supabase
         const { data, error } = await supabase
           .from('patients')
           .insert([{
             full_name: patient.fullName,
             record_number: patient.recordNumber,
             notes: patient.notes,
-            created_by: userId,
+            created_by: session.user.id,
           }])
           .select()
           .single();
+
+        console.log('Patient creation result:', { data, error });
+
         if (error) throw error;
         supabaseId = data.id;
       } catch (error) {
         console.error('Error creating patient in Supabase:', error);
+        // If there's an error with Supabase, we'll still save locally
+        isOnline = false;
       }
     }
 
+    // Save to local database
     return new Promise((resolve, reject) => {
       this.database!.transaction(
         (tx) => {
@@ -644,6 +742,40 @@ export class DatabaseHelper {
         (error) => {
           reject(error);
         }
+      );
+    });
+  }
+
+  public async updateUser(user: { id: string; email: string; password: string; fullName: string; hospitalName: string; role: string; synced: boolean }): Promise<void> {
+    if (!this.database) throw new Error('Database not initialized');
+    return new Promise((resolve, reject) => {
+      this.database!.transaction(
+        (tx) => {
+          tx.executeSql(
+            `UPDATE users SET email = ?, password = ?, full_name = ?, hospital_name = ?, role = ?, synced = ? WHERE id = ?`,
+            [user.email, user.password, user.fullName, user.hospitalName, user.role, user.synced ? 1 : 0, user.id],
+            () => resolve(),
+            (_, error) => { reject(error); return false; }
+          );
+        },
+        (error) => { reject(error); }
+      );
+    });
+  }
+
+  public async markUserAsSynced(id: string): Promise<void> {
+    if (!this.database) throw new Error('Database not initialized');
+    return new Promise((resolve, reject) => {
+      this.database!.transaction(
+        (tx) => {
+          tx.executeSql(
+            `UPDATE users SET synced = 1 WHERE id = ?`,
+            [id],
+            () => resolve(),
+            (_, error) => { reject(error); return false; }
+          );
+        },
+        (error) => { reject(error); }
       );
     });
   }

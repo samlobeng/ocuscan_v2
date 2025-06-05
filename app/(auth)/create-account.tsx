@@ -103,15 +103,15 @@ export default function CreateAccountScreen() {
         const db = DatabaseHelper.getInstance();
         
         try {
-          const emailExists = await db.checkEmailExists(formData.email);
+        const emailExists = await db.checkEmailExists(formData.email);
           console.log('Email exists check result:', emailExists);
 
-          if (emailExists) {
+        if (emailExists) {
             console.log('Email already exists');
-            setErrors(prev => ({
-              ...prev,
-              email: 'An account with this email already exists'
-            }));
+          setErrors(prev => ({
+            ...prev,
+            email: 'An account with this email already exists'
+          }));
             return;
           }
         } catch (error) {
@@ -127,12 +127,12 @@ export default function CreateAccountScreen() {
         let user;
         try {
           user = await db.createUser({
-            email: formData.email,
-            password: formData.password,
-            fullName: formData.fullName,
-            hospitalName: formData.hospitalName,
-            role: 'physician'
-          });
+          email: formData.email,
+          password: formData.password,
+          fullName: formData.fullName,
+          hospitalName: formData.hospitalName,
+          role: 'physician'
+        });
           console.log('User created successfully:', user);
         } catch (error) {
           console.error('Error creating user:', error);
@@ -146,7 +146,7 @@ export default function CreateAccountScreen() {
         // Store user session
         console.log('Storing user session...');
         try {
-          await SecureStore.setItemAsync('user', JSON.stringify(user));
+        await SecureStore.setItemAsync('user', JSON.stringify(user));
           console.log('User session stored successfully');
         } catch (error) {
           console.error('Error storing user session:', error);

@@ -14,6 +14,7 @@ import { StatusBar } from 'expo-status-bar';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { DatabaseHelper } from '../lib/database/DatabaseHelper';
 import * as SecureStore from 'expo-secure-store';
+import { supabase } from '../lib/supabase';
 
 export default function SignInScreen() {
   const [formData, setFormData] = useState({
@@ -55,6 +56,17 @@ export default function SignInScreen() {
   const handleSignIn = async () => {
     if (validateForm()) {
       try {
+        // First authenticate with Supabase
+        const { data: { session }, error: supabaseError } = await supabase.auth.signInWithPassword({
+          email: formData.email,
+          password: formData.password,
+        });
+
+        if (supabaseError) {
+          throw supabaseError;
+        }
+
+        // Then authenticate with local database
         const db = DatabaseHelper.getInstance();
         const user = await db.authenticateUser(formData.email, formData.password);
 

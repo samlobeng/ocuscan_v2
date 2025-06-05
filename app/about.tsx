@@ -7,7 +7,7 @@ export default function AboutScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>About OcuScan</Text>
         <Text style={styles.sectionDescription}>
-          Learn more about OcuScan and its features
+          OcuScan is an AI-powered retinal disease detection assistant for physicians. Version 1.0.0. Developed by Samuel Obeng.
         </Text>
       </View>
     </ScrollView>

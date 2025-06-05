@@ -18,6 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { DatabaseHelper } from '../lib/database/DatabaseHelper';
+import { PredictionService, Predictions } from '../lib/services/PredictionService';
 
 interface Patient {
   id: number;
@@ -142,12 +143,28 @@ export default function ScanScreen() {
     if (selectedImages.length === 0) return;
     setIsAnalyzing(true);
     try {
-      // TODO: Implement image analysis for all selected images
-      await new Promise(resolve => setTimeout(resolve, 2000)); // Simulated delay
-      router.push('scan-results' as any);
+      const predictionService = PredictionService.getInstance();
+      const results: { [key: string]: Predictions } = {};
+      
+      // Analyze each image
+      for (const imageUri of selectedImages) {
+        const prediction = await predictionService.predictImage(imageUri);
+        if (prediction) {
+          results[imageUri] = prediction;
+        }
+      }
+      
+      // Navigate to results screen with predictions
+      router.push({
+        pathname: '/scan-results' as any,
+        params: {
+          results: JSON.stringify(results),
+          patientId: patientId,
+        }
+      });
     } catch (error) {
       console.error('Analysis error:', error);
-      Alert.alert('Error', 'Failed to analyze image');
+      Alert.alert('Error', 'Failed to analyze image. Please try again.');
     } finally {
       setIsAnalyzing(false);
     }
